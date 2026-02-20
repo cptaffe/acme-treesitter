@@ -37,33 +37,33 @@ func main() {
 		log.Fatal("acme-treesitter: --config flag is required")
 	}
 
-	var zapLog *zap.Logger
+	var l *zap.Logger
 	var err error
 	if *verbose {
-		zapLog, err = zap.NewDevelopment()
+		l, err = zap.NewDevelopment()
 	} else {
-		zapLog, err = zap.NewProduction()
+		l, err = zap.NewProduction()
 	}
 	if err != nil {
 		log.Fatalf("init logger: %v", err)
 	}
-	zap.ReplaceGlobals(zapLog)
-	defer zapLog.Sync() //nolint:errcheck
+	zap.ReplaceGlobals(l)
+	defer l.Sync() //nolint:errcheck
 
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
-		zapLog.Fatal("load config", zap.Error(err))
+		l.Fatal("load config", zap.Error(err))
 	}
 
 	handlers, err := ts.CompileHandlers(cfg)
 	if err != nil {
-		zapLog.Fatal("compile filename handlers", zap.Error(err))
+		l.Fatal("compile filename handlers", zap.Error(err))
 	}
-	zapLog.Info("handlers compiled", zap.Int("count", len(handlers)))
+	l.Info("handlers compiled", zap.Int("count", len(handlers)))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
-	ctx = logger.NewContext(ctx, zapLog)
+	ctx = logger.NewContext(ctx, l)
 
 	// Cancel the context on SIGTERM or SIGINT so per-window goroutines can
 	// delete their acme-styles layers before the process exits.
@@ -84,7 +84,7 @@ func main() {
 	// Seed from currently-open windows.
 	wins, err := acme.Windows()
 	if err != nil {
-		zapLog.Fatal("acme.Windows", zap.Error(err))
+		l.Fatal("acme.Windows", zap.Error(err))
 	}
 	for _, w := range wins {
 		start(w.ID, w.Name)
@@ -93,7 +93,7 @@ func main() {
 	// Stream new opens and closes.
 	lr, err := acme.Log()
 	if err != nil {
-		zapLog.Fatal("acme.Log", zap.Error(err))
+		l.Fatal("acme.Log", zap.Error(err))
 	}
 	for {
 		ev, err := lr.Read()
@@ -101,7 +101,7 @@ func main() {
 			// acme exited or log closed; wait for all windows to clean up.
 			cancel()
 			wg.Wait()
-			zapLog.Fatal("acme log", zap.Error(err))
+			l.Fatal("acme log", zap.Error(err))
 		}
 		switch ev.Op {
 		case "new":
