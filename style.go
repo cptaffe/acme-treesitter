@@ -1,59 +1,49 @@
 package main
 
 import (
-	"bufio"
-	"fmt"
-	"os"
 	"strings"
+
+	"github.com/cptaffe/acme-styles/layer"
 )
 
-// StyleEntry is a (style-index, start-rune, end-rune) triple ready for
-// writing to an acme-styles layer or acme's native style file.
-// Start is inclusive, End is exclusive — matching acme's event coordinates.
-type StyleEntry struct {
-	StyleIdx int
-	Start    int
-	End      int // exclusive
+// canonicalTable is the ordered list of tree-sitter capture names that
+// acme-treesitter recognises and emits.  Index 0 is the "no style" sentinel.
+// These names must match the palette entries in the master styles file.
+var canonicalTable = []string{
+	"", // 0 = unstyled
+	"keyword",
+	"comment",
+	"string",
+	"type",
+	"number",
+	"operator",
+	"error",
+	"function",
+	"macro",
 }
 
-// StyleMap maps style name → index as defined in the acme styles file.
-// Index 0 is "default" (transparent).
-type StyleMap map[string]int
-
-// LoadStyleFile reads an acme styles file and returns a name→index map.
-// Lines beginning with '#' are ignored.
-func LoadStyleFile(path string) (StyleMap, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, err
-	}
-	defer f.Close()
-
-	sm := make(StyleMap)
-	idx := 0
-	sc := bufio.NewScanner(f)
-	for sc.Scan() {
-		line := strings.TrimSpace(sc.Text())
-		if line == "" || strings.HasPrefix(line, "#") {
-			continue
+// canonicalIndex maps palette entry names to indices in canonicalTable.
+var canonicalIndex = func() map[string]int {
+	m := make(map[string]int, len(canonicalTable))
+	for i, name := range canonicalTable {
+		if name != "" {
+			m[name] = i
 		}
-		fields := strings.Fields(line)
-		if len(fields) == 0 {
-			continue
-		}
-		sm[fields[0]] = idx
-		idx++
 	}
-	return sm, sc.Err()
-}
+	return m
+}()
 
-// lookupCapture converts a tree-sitter capture name (e.g. "function.method")
-// to a style index using a hierarchical fallback: "function.method" →
-// "function" → 0 (not found).  Index 0 means "skip this capture".
-func lookupCapture(sm StyleMap, captureName string) int {
+// lookupCaptureName converts a tree-sitter capture name (e.g. "@function.method")
+// to a canonicalTable index using hierarchical fallback:
+//
+//	"function.method" → "function" → 0 (unknown)
+//
+// Index 0 means "skip this capture".  Callers retrieve the name via
+// canonicalTable[idx].
+func lookupCaptureIdx(captureName string) int {
 	name := strings.TrimPrefix(captureName, "@")
 	for {
-		if idx, ok := sm[name]; ok {
+		if idx, ok := canonicalIndex[name]; ok {
 			return idx
 		}
 		dot := strings.LastIndex(name, ".")
@@ -64,15 +54,27 @@ func lookupCapture(sm StyleMap, captureName string) int {
 	}
 }
 
-// compressToEntries converts a per-byte style array (stylePerByte[i] = style
-// index for byte i, 0 = unstyled) into a slice of StyleEntry values using
-// rune offsets (Start inclusive, End exclusive), suitable for writing to an
-// acme-styles layer or acme's native style file.
-func compressToEntries(stylePerByte []byte, src []byte) []StyleEntry {
-	var entries []StyleEntry
+// applyCapture marks bytes [start, end) in stylePerByte with idx,
+// but only where the slot is still 0 ("first match wins").
+func applyCapture(stylePerByte []byte, start, end, idx int) {
+	if idx == 0 {
+		return
+	}
+	for i := start; i < end && i < len(stylePerByte); i++ {
+		if stylePerByte[i] == 0 {
+			stylePerByte[i] = byte(idx)
+		}
+	}
+}
+
+// compressToEntries converts a per-byte style-index array (stylePerByte[i] is
+// an index into canonicalTable; 0 = unstyled) into a slice of layer.Entry
+// values using rune offsets (Start inclusive, End exclusive).
+func compressToEntries(stylePerByte []byte, src []byte) []layer.Entry {
+	var entries []layer.Entry
 	byteOff := 0
 	runeOff := 0
-	curStyle := 0
+	curIdx := 0
 	spanStart := 0
 
 	for byteOff < len(src) {
@@ -92,52 +94,28 @@ func compressToEntries(stylePerByte []byte, src []byte) []StyleEntry {
 			size = 1 // guard against truncated input
 		}
 
-		style := int(stylePerByte[byteOff])
-		if style != curStyle {
-			if curStyle != 0 {
-				entries = append(entries, StyleEntry{
-					StyleIdx: curStyle,
-					Start:    spanStart,
-					End:      runeOff,
+		idx := int(stylePerByte[byteOff])
+		if idx != curIdx {
+			if curIdx != 0 {
+				entries = append(entries, layer.Entry{
+					Name:  canonicalTable[curIdx],
+					Start: spanStart,
+					End:   runeOff,
 				})
 			}
-			curStyle = style
+			curIdx = idx
 			spanStart = runeOff
 		}
 
 		byteOff += size
 		runeOff++
 	}
-	if curStyle != 0 {
-		entries = append(entries, StyleEntry{
-			StyleIdx: curStyle,
-			Start:    spanStart,
-			End:      runeOff,
+	if curIdx != 0 {
+		entries = append(entries, layer.Entry{
+			Name:  canonicalTable[curIdx],
+			Start: spanStart,
+			End:   runeOff,
 		})
 	}
 	return entries
-}
-
-// applyCapture marks bytes [start, end) in stylePerByte with styleIdx,
-// but only where the slot is still 0 ("first match wins").
-func applyCapture(stylePerByte []byte, start, end, styleIdx int) {
-	if styleIdx == 0 {
-		return
-	}
-	for i := start; i < end && i < len(stylePerByte); i++ {
-		if stylePerByte[i] == 0 {
-			stylePerByte[i] = byte(styleIdx)
-		}
-	}
-}
-
-// styleEntriesToText formats style entries as "idx start end\n" lines,
-// one per entry, ready for writing to an acme-styles layer style file or
-// acme's native <winid>/style file.
-func styleEntriesToText(entries []StyleEntry) string {
-	var sb strings.Builder
-	for _, e := range entries {
-		fmt.Fprintf(&sb, "%d %d %d\n", e.StyleIdx, e.Start, e.End)
-	}
-	return sb.String()
 }

@@ -10,7 +10,8 @@ import (
 
 // Config is the top-level structure of ~/lib/acme-treesitter/config.yaml.
 type Config struct {
-	// StyleFile is the path to the acme styles file.
+	// StyleFile is unused; kept for backward compatibility with existing
+	// config files.  The palette is managed by acme-styles.
 	StyleFile string `yaml:"style_file"`
 
 	// FilenameHandlers maps filename patterns to grammar language IDs.

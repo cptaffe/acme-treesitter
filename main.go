@@ -13,8 +13,13 @@
 package main
 
 import (
+	"context"
 	"flag"
 	"log"
+	"os"
+	"os/signal"
+	"sync"
+	"syscall"
 
 	"9fans.net/go/acme"
 )
@@ -36,17 +41,6 @@ func main() {
 		log.Fatalf("load config: %v", err)
 	}
 
-	if cfg.StyleFile == "" {
-		log.Fatal("acme-treesitter: config missing style_file")
-	}
-	sm, err := LoadStyleFile(cfg.StyleFile)
-	if err != nil {
-		log.Fatalf("load styles %s: %v", cfg.StyleFile, err)
-	}
-	if Verbose {
-		log.Printf("loaded %d style entries from %s", len(sm), cfg.StyleFile)
-	}
-
 	// Compile grammars first so handler lookup can resolve language_id strings.
 	initLanguages()
 
@@ -58,13 +52,32 @@ func main() {
 		log.Printf("compiled %d filename handlers", len(handlers))
 	}
 
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	// Cancel the context on SIGTERM or SIGINT so per-window goroutines can
+	// delete their acme-styles layers before the process exits.
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
+	go func() {
+		<-sigs
+		cancel()
+	}()
+
+	var wg sync.WaitGroup
+
+	start := func(id int, name string) {
+		wg.Add(1)
+		go runWindow(ctx, &wg, id, name, handlers)
+	}
+
 	// Seed from currently-open windows.
 	wins, err := acme.Windows()
 	if err != nil {
 		log.Fatalf("acme.Windows: %v", err)
 	}
 	for _, w := range wins {
-		go runWindow(w.ID, w.Name, handlers, sm)
+		start(w.ID, w.Name)
 	}
 
 	// Stream new opens and closes.
@@ -75,11 +88,14 @@ func main() {
 	for {
 		ev, err := lr.Read()
 		if err != nil {
+			// acme exited or log closed; wait for all windows to clean up.
+			cancel()
+			wg.Wait()
 			log.Fatalf("acme log: %v", err)
 		}
 		switch ev.Op {
 		case "new":
-			go runWindow(ev.ID, ev.Name, handlers, sm)
+			start(ev.ID, ev.Name)
 		}
 	}
 }

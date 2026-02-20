@@ -1,17 +1,18 @@
 package main
 
 import (
+	"github.com/cptaffe/acme-styles/layer"
 	tree_sitter "github.com/tree-sitter/go-tree-sitter"
 )
 
 // computeHighlights parses src with lang's grammar, runs the highlight query,
-// and returns a slice of StyleEntry values (rune-offset based) ready for an
+// and returns a slice of layer.Entry values (rune-offset based) ready for an
 // acme-styles layer.
 //
 // "First capture wins": for a given byte position, whichever pattern appears
 // earliest in the query file claims that position.  Later catch-all patterns
 // (e.g. @variable) therefore do not overwrite specific ones (e.g. @function).
-func computeHighlights(lang *Language, src []byte, sm StyleMap) []StyleEntry {
+func computeHighlights(lang *Language, src []byte) []layer.Entry {
 	if lang == nil || lang.query == nil || len(src) == 0 {
 		return nil
 	}
@@ -27,8 +28,8 @@ func computeHighlights(lang *Language, src []byte, sm StyleMap) []StyleEntry {
 	qc := tree_sitter.NewQueryCursor()
 	defer qc.Close()
 
-	// stylePerByte[i] = style index (≥1) for byte i; 0 = unclaimed.
-	// We use uint8 — style indices never exceed 255.
+	// stylePerByte[i] = canonicalTable index (≥1) for byte i; 0 = unclaimed.
+	// We use uint8 — canonicalTable has ≤ 10 entries.
 	stylePerByte := make([]byte, len(src))
 
 	captureNames := lang.query.CaptureNames()
@@ -43,13 +44,13 @@ func computeHighlights(lang *Language, src []byte, sm StyleMap) []StyleEntry {
 			continue
 		}
 		capName := captureNames[cap.Index]
-		styleIdx := lookupCapture(sm, capName)
-		if styleIdx == 0 {
+		idx := lookupCaptureIdx(capName)
+		if idx == 0 {
 			continue
 		}
 		start := int(cap.Node.StartByte())
 		end := int(cap.Node.EndByte())
-		applyCapture(stylePerByte, start, end, styleIdx)
+		applyCapture(stylePerByte, start, end, idx)
 	}
 
 	return compressToEntries(stylePerByte, src)
