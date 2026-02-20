@@ -4,7 +4,7 @@ go 1.24.4
 
 require (
 	9fans.net/go v0.0.7
-	github.com/cptaffe/acme-styles v0.0.0
+	github.com/cptaffe/acme-styles v0.0.0-20260220164436-7a3822fafbca
 	github.com/tree-sitter/go-tree-sitter v0.25.0
 	github.com/tree-sitter/tree-sitter-bash v0.25.1
 	github.com/tree-sitter/tree-sitter-c v0.24.1
