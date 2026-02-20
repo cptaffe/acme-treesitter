@@ -1,4 +1,4 @@
-package main
+package treesitter
 
 import (
 	_ "embed"
@@ -46,6 +46,10 @@ var (
 	langOnce   sync.Once
 	langByName map[string]*Language
 )
+
+func init() {
+	initLanguages()
+}
 
 // initLanguages compiles all language grammars and their highlight queries.
 // Grammars whose query fails to parse are registered without a query (files

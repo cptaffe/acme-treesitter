@@ -1,23 +1,27 @@
-package main
+package treesitter
 
 import (
 	"bufio"
 	"context"
 	"fmt"
 	"io"
-	"log"
 	"time"
 
 	"9fans.net/go/plan9"
 	"9fans.net/go/plan9/client"
 	"github.com/cptaffe/acme-styles/layer"
+	"go.uber.org/zap"
 )
+
+// Log is the package-level logger.  main should replace it with a configured
+// logger (zap.NewDevelopment or zap.NewProduction) before calling RunWindow.
+var Log = zap.NewNop()
 
 const layerName = "treesitter"
 
 const debounceDuration = 200 * time.Millisecond
 
-// runWindow is the per-window goroutine.  It:
+// RunWindow is the per-window goroutine.  It:
 //  1. Detects the file's language via the compiled filename handlers.
 //  2. Allocates an acme-styles layer for the window.
 //  3. Does an initial parse + highlight.
@@ -25,26 +29,23 @@ const debounceDuration = 200 * time.Millisecond
 //
 // When ctx is cancelled (e.g. on SIGTERM/SIGINT) the layer is deleted from
 // the compositor so highlights don't linger after the process exits.
-func runWindow(ctx context.Context, wg interface{ Done() }, id int, name string, handlers []runtimeHandler) {
+func RunWindow(ctx context.Context, wg interface{ Done() }, id int, name string, handlers []Handler) {
 	defer wg.Done()
 
-	lang := detectLanguageForName(handlers, name)
+	log := Log.With(zap.Int("window", id), zap.String("name", name))
+
+	lang := detectLanguage(handlers, name)
 	if lang == nil {
-		if Verbose {
-			log.Printf("window %d %q: no handler matched", id, name)
-		}
+		log.Debug("no handler matched")
 		return
 	}
-	if Verbose {
-		log.Printf("window %d %q: matched language %s", id, name, lang.Name)
-	}
+	log.Debug("matched language", zap.String("lang", lang.Name))
 
 	sl, err := layer.Open(id, layerName)
-	if err != nil && Verbose {
-		log.Printf("window %d: open layer: %v (acme-styles not running?)", id, err)
-	}
-	if Verbose && sl != nil {
-		log.Printf("window %d: allocated layer %d", id, sl.LayerID)
+	if err != nil {
+		log.Debug("open layer", zap.Error(err))
+	} else {
+		log.Debug("allocated layer", zap.Int("layerID", sl.LayerID))
 	}
 	// sl may be nil if acme-styles is not running; Apply/Clear/Delete are nil-safe.
 
@@ -53,33 +54,25 @@ func runWindow(ctx context.Context, wg interface{ Done() }, id int, name string,
 	// the global 9fans.net/go/acme singleton.
 	fs, err := client.MountService("acme")
 	if err != nil {
-		if Verbose {
-			log.Printf("window %d: mount acme: %v", id, err)
-		}
+		log.Debug("mount acme", zap.Error(err))
 		return
 	}
 	defer fs.Close()
 
 	// Initial highlight.
-	if err := highlight(id, lang, sl, fs); err != nil {
-		if Verbose {
-			log.Printf("window %d %s: initial highlight: %v", id, name, err)
-		}
-	} else if Verbose {
-		log.Printf("window %d %s: initial highlight ok", id, name)
+	if err := doHighlight(id, log, lang, sl, fs); err != nil {
+		log.Debug("initial highlight", zap.Error(err))
+	} else {
+		log.Debug("initial highlight ok")
 	}
 
 	// Open <winid>/log for body-edit notifications.
 	logFid, err := fs.Open(fmt.Sprintf("%d/log", id), plan9.OREAD)
 	if err != nil {
-		if Verbose {
-			log.Printf("window %d: open log: %v (no incremental re-highlight)", id, err)
-		}
+		log.Debug("open log, no incremental re-highlight", zap.Error(err))
 		return
 	}
-	if Verbose {
-		log.Printf("window %d: watching log", id)
-	}
+	log.Debug("watching log")
 
 	timer := time.NewTimer(debounceDuration)
 	timer.Stop()
@@ -104,8 +97,8 @@ func runWindow(ctx context.Context, wg interface{ Done() }, id int, name string,
 	}()
 
 	defer func() {
-		logFid.Close()  // unblocks the scanner goroutine if still running
-		<-scanDone      // wait for it to exit before returning
+		logFid.Close() // unblocks the scanner goroutine if still running
+		<-scanDone     // wait for it to exit before returning
 	}()
 
 	for {
@@ -128,8 +121,8 @@ func runWindow(ctx context.Context, wg interface{ Done() }, id int, name string,
 
 		case <-timer.C:
 			pending = false
-			if err := highlight(id, lang, sl, fs); err != nil && Verbose {
-				log.Printf("window %d: re-highlight: %v", id, err)
+			if err := doHighlight(id, log, lang, sl, fs); err != nil {
+				log.Debug("re-highlight", zap.Error(err))
 			}
 
 		case <-scanDone:
@@ -139,23 +132,19 @@ func runWindow(ctx context.Context, wg interface{ Done() }, id int, name string,
 	}
 }
 
-// highlight reads the window body from acme via fs, parses it with
+// doHighlight reads the window body from acme via fs, parses it with
 // tree-sitter, and applies the resulting style entries to sl.
-func highlight(id int, lang *Language, sl *layer.StyleLayer, fs *client.Fsys) error {
+func doHighlight(id int, log *zap.Logger, lang *Language, sl *layer.StyleLayer, fs *client.Fsys) error {
 	body, err := readBody(id, fs)
 	if err != nil {
 		return err
 	}
 	entries := computeHighlights(lang, body)
-	if Verbose {
-		log.Printf("window %d: %d highlight entries computed", id, len(entries))
-	}
+	log.Debug("highlight entries computed", zap.Int("count", len(entries)))
 	if err := sl.Apply(entries); err != nil {
 		return err
 	}
-	if Verbose {
-		log.Printf("window %d: Apply ok", id)
-	}
+	log.Debug("Apply ok")
 	return nil
 }
 

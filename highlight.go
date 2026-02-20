@@ -1,4 +1,4 @@
-package main
+package treesitter
 
 import (
 	"github.com/cptaffe/acme-styles/layer"

@@ -22,35 +22,41 @@ import (
 	"syscall"
 
 	"9fans.net/go/acme"
+	ts "github.com/cptaffe/acme-treesitter"
+	"github.com/cptaffe/acme-treesitter/config"
+	"go.uber.org/zap"
 )
-
-// Verbose enables extra diagnostic logging.
-var Verbose bool
 
 func main() {
 	cfgPath := flag.String("config", "", "path to config.yaml (required)")
-	flag.BoolVar(&Verbose, "v", false, "verbose logging")
+	verbose := flag.Bool("v", false, "verbose logging")
 	flag.Parse()
 
 	if *cfgPath == "" {
 		log.Fatal("acme-treesitter: --config flag is required")
 	}
 
-	cfg, err := LoadConfig(*cfgPath)
+	var err error
+	if *verbose {
+		ts.Log, err = zap.NewDevelopment()
+	} else {
+		ts.Log, err = zap.NewProduction()
+	}
 	if err != nil {
-		log.Fatalf("load config: %v", err)
+		log.Fatalf("init logger: %v", err)
+	}
+	defer ts.Log.Sync() //nolint:errcheck
+
+	cfg, err := config.Load(*cfgPath)
+	if err != nil {
+		ts.Log.Fatal("load config", zap.Error(err))
 	}
 
-	// Compile grammars first so handler lookup can resolve language_id strings.
-	initLanguages()
-
-	handlers, err := compileHandlers(cfg)
+	handlers, err := ts.CompileHandlers(cfg)
 	if err != nil {
-		log.Fatalf("compile filename handlers: %v", err)
+		ts.Log.Fatal("compile filename handlers", zap.Error(err))
 	}
-	if Verbose {
-		log.Printf("compiled %d filename handlers", len(handlers))
-	}
+	ts.Log.Info("handlers compiled", zap.Int("count", len(handlers)))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -68,13 +74,13 @@ func main() {
 
 	start := func(id int, name string) {
 		wg.Add(1)
-		go runWindow(ctx, &wg, id, name, handlers)
+		go ts.RunWindow(ctx, &wg, id, name, handlers)
 	}
 
 	// Seed from currently-open windows.
 	wins, err := acme.Windows()
 	if err != nil {
-		log.Fatalf("acme.Windows: %v", err)
+		ts.Log.Fatal("acme.Windows", zap.Error(err))
 	}
 	for _, w := range wins {
 		start(w.ID, w.Name)
@@ -83,7 +89,7 @@ func main() {
 	// Stream new opens and closes.
 	lr, err := acme.Log()
 	if err != nil {
-		log.Fatalf("acme.Log: %v", err)
+		ts.Log.Fatal("acme.Log", zap.Error(err))
 	}
 	for {
 		ev, err := lr.Read()
@@ -91,7 +97,7 @@ func main() {
 			// acme exited or log closed; wait for all windows to clean up.
 			cancel()
 			wg.Wait()
-			log.Fatalf("acme log: %v", err)
+			ts.Log.Fatal("acme log", zap.Error(err))
 		}
 		switch ev.Op {
 		case "new":
