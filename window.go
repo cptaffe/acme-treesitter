@@ -10,12 +10,9 @@ import (
 	"9fans.net/go/plan9"
 	"9fans.net/go/plan9/client"
 	"github.com/cptaffe/acme-styles/layer"
+	"github.com/cptaffe/acme-treesitter/logger"
 	"go.uber.org/zap"
 )
-
-// Log is the package-level logger.  main should replace it with a configured
-// logger (zap.NewDevelopment or zap.NewProduction) before calling RunWindow.
-var Log = zap.NewNop()
 
 const layerName = "treesitter"
 
@@ -32,7 +29,8 @@ const debounceDuration = 200 * time.Millisecond
 func RunWindow(ctx context.Context, wg interface{ Done() }, id int, name string, handlers []Handler) {
 	defer wg.Done()
 
-	log := Log.With(zap.Int("window", id), zap.String("name", name))
+	ctx = logger.NewContext(ctx, logger.L(ctx).With(zap.Int("window", id), zap.String("name", name)))
+	log := logger.L(ctx)
 
 	lang := detectLanguage(handlers, name)
 	if lang == nil {
@@ -60,7 +58,7 @@ func RunWindow(ctx context.Context, wg interface{ Done() }, id int, name string,
 	defer fs.Close()
 
 	// Initial highlight.
-	if err := doHighlight(id, log, lang, sl, fs); err != nil {
+	if err := doHighlight(ctx, id, lang, sl, fs); err != nil {
 		log.Debug("initial highlight", zap.Error(err))
 	} else {
 		log.Debug("initial highlight ok")
@@ -121,7 +119,7 @@ func RunWindow(ctx context.Context, wg interface{ Done() }, id int, name string,
 
 		case <-timer.C:
 			pending = false
-			if err := doHighlight(id, log, lang, sl, fs); err != nil {
+			if err := doHighlight(ctx, id, lang, sl, fs); err != nil {
 				log.Debug("re-highlight", zap.Error(err))
 			}
 
@@ -134,7 +132,8 @@ func RunWindow(ctx context.Context, wg interface{ Done() }, id int, name string,
 
 // doHighlight reads the window body from acme via fs, parses it with
 // tree-sitter, and applies the resulting style entries to sl.
-func doHighlight(id int, log *zap.Logger, lang *Language, sl *layer.StyleLayer, fs *client.Fsys) error {
+func doHighlight(ctx context.Context, id int, lang *Language, sl *layer.StyleLayer, fs *client.Fsys) error {
+	log := logger.L(ctx)
 	body, err := readBody(id, fs)
 	if err != nil {
 		return err

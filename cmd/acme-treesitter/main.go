@@ -24,6 +24,7 @@ import (
 	"9fans.net/go/acme"
 	ts "github.com/cptaffe/acme-treesitter"
 	"github.com/cptaffe/acme-treesitter/config"
+	"github.com/cptaffe/acme-treesitter/logger"
 	"go.uber.org/zap"
 )
 
@@ -36,30 +37,33 @@ func main() {
 		log.Fatal("acme-treesitter: --config flag is required")
 	}
 
+	var zapLog *zap.Logger
 	var err error
 	if *verbose {
-		ts.Log, err = zap.NewDevelopment()
+		zapLog, err = zap.NewDevelopment()
 	} else {
-		ts.Log, err = zap.NewProduction()
+		zapLog, err = zap.NewProduction()
 	}
 	if err != nil {
 		log.Fatalf("init logger: %v", err)
 	}
-	defer ts.Log.Sync() //nolint:errcheck
+	zap.ReplaceGlobals(zapLog)
+	defer zapLog.Sync() //nolint:errcheck
 
 	cfg, err := config.Load(*cfgPath)
 	if err != nil {
-		ts.Log.Fatal("load config", zap.Error(err))
+		zapLog.Fatal("load config", zap.Error(err))
 	}
 
 	handlers, err := ts.CompileHandlers(cfg)
 	if err != nil {
-		ts.Log.Fatal("compile filename handlers", zap.Error(err))
+		zapLog.Fatal("compile filename handlers", zap.Error(err))
 	}
-	ts.Log.Info("handlers compiled", zap.Int("count", len(handlers)))
+	zapLog.Info("handlers compiled", zap.Int("count", len(handlers)))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
+	ctx = logger.NewContext(ctx, zapLog)
 
 	// Cancel the context on SIGTERM or SIGINT so per-window goroutines can
 	// delete their acme-styles layers before the process exits.
@@ -80,7 +84,7 @@ func main() {
 	// Seed from currently-open windows.
 	wins, err := acme.Windows()
 	if err != nil {
-		ts.Log.Fatal("acme.Windows", zap.Error(err))
+		zapLog.Fatal("acme.Windows", zap.Error(err))
 	}
 	for _, w := range wins {
 		start(w.ID, w.Name)
@@ -89,7 +93,7 @@ func main() {
 	// Stream new opens and closes.
 	lr, err := acme.Log()
 	if err != nil {
-		ts.Log.Fatal("acme.Log", zap.Error(err))
+		zapLog.Fatal("acme.Log", zap.Error(err))
 	}
 	for {
 		ev, err := lr.Read()
@@ -97,7 +101,7 @@ func main() {
 			// acme exited or log closed; wait for all windows to clean up.
 			cancel()
 			wg.Wait()
-			ts.Log.Fatal("acme log", zap.Error(err))
+			zapLog.Fatal("acme log", zap.Error(err))
 		}
 		switch ev.Op {
 		case "new":
