@@ -104,44 +104,29 @@ func main() {
 		}()
 	}
 
-	// withRetry calls fn until it returns nil or the context is cancelled,
-	// sleeping between failures using full-jitter exponential backoff.
-	withRetry := func(base, cap time.Duration, fn func() error) error {
-		bo := ts.Backoff{Base: base, Cap: cap}
-		for {
-			if err := fn(); err == nil {
-				return nil
-			} else if ctx.Err() != nil {
-				return ctx.Err()
-			} else {
-				d := bo.Next()
-				l.Warn("retrying", zap.Error(err), zap.Duration("in", d))
-				select {
-				case <-time.After(d):
-				case <-ctx.Done():
-					return ctx.Err()
-				}
-			}
-		}
-	}
-
-	// Main reconnect loop.
-	//
-	// The first call to acme.Windows() and acme.Log() blocks inside the
-	// acme package until the background supervisor has established the
-	// initial connection to acme (no retry needed here for startup).
-	//
-	// After a disconnect, fsys goes nil and both calls return "not
-	// connected" immediately; withRetry handles the re-connect wait.
+	// Main reconnect loop.  Mount() dials a fresh connection on each
+	// iteration; on failure we wait with full-jitter backoff and retry.
+	// Windows() and Log() are called on the explicit Fsys so that a
+	// broken connection never returns a stale cached result.
+	bo := ts.Backoff{Base: 200 * time.Millisecond, Cap: 30 * time.Second}
 	for ctx.Err() == nil {
+		f, err := acme.Mount()
+		if err != nil {
+			d := bo.Next()
+			l.Warn("mount acme", zap.Error(err), zap.Duration("in", d))
+			select {
+			case <-time.After(d):
+			case <-ctx.Done():
+			}
+			continue
+		}
+		bo.Reset()
+
 		// Seed from currently-open windows.
-		var wins []acme.WinInfo
-		if err := withRetry(200*time.Millisecond, 30*time.Second, func() error {
-			var e error
-			wins, e = acme.Windows()
-			return e
-		}); err != nil {
-			break
+		wins, err := f.Windows()
+		if err != nil {
+			l.Warn("acme.Windows", zap.Error(err))
+			continue
 		}
 		for _, w := range wins {
 			start(w.ID, w.Name)
@@ -149,12 +134,10 @@ func main() {
 
 		// Open the log stream.
 		var lr *acme.LogReader
-		if err := withRetry(200*time.Millisecond, 30*time.Second, func() error {
-			var e error
-			lr, e = acme.Log()
-			return e
-		}); err != nil {
-			break
+		lr, err = f.Log()
+		if err != nil {
+			l.Warn("acme.Log", zap.Error(err))
+			continue
 		}
 
 		l.Info("connected to acme log")
