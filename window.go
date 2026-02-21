@@ -32,7 +32,22 @@ func RunWindow(ctx context.Context, wg interface{ Done() }, id int, name string,
 	ctx = logger.NewContext(ctx, logger.L(ctx).With(zap.Int("window", id), zap.String("name", name)))
 	log := logger.L(ctx)
 
+	// Open the acme connection first: it is needed for body reads whether we
+	// detect the language by filename or by shebang.
+	fs, err := client.MountService("acme")
+	if err != nil {
+		log.Debug("mount acme", zap.Error(err))
+		return
+	}
+	defer fs.Close()
+
 	lang := detectLanguage(handlers, name)
+	if lang == nil {
+		// Filename didn't match; peek at the first line for a #! interpreter.
+		if first, err := readFirstLine(id, fs); err == nil {
+			lang = detectByShebang(first)
+		}
+	}
 	if lang == nil {
 		log.Debug("no handler matched")
 		return
@@ -46,16 +61,6 @@ func RunWindow(ctx context.Context, wg interface{ Done() }, id int, name string,
 		log.Debug("allocated layer", zap.Int("layerID", sl.LayerID))
 	}
 	// sl may be nil if acme-styles is not running; Apply/Clear/Delete are nil-safe.
-
-	// Open a dedicated acme 9P connection for this window's lifetime.
-	// Using a fresh connection per goroutine avoids fid-namespace races with
-	// the global 9fans.net/go/acme singleton.
-	fs, err := client.MountService("acme")
-	if err != nil {
-		log.Debug("mount acme", zap.Error(err))
-		return
-	}
-	defer fs.Close()
 
 	// Initial highlight.
 	if err := doHighlight(ctx, id, lang, sl, fs); err != nil {
@@ -155,4 +160,18 @@ func readBody(id int, fs *client.Fsys) ([]byte, error) {
 	}
 	defer fid.Close()
 	return io.ReadAll(fid)
+}
+
+// readFirstLine reads the first line of <id>/body for shebang detection.
+func readFirstLine(id int, fs *client.Fsys) (string, error) {
+	fid, err := fs.Open(fmt.Sprintf("%d/body", id), plan9.OREAD)
+	if err != nil {
+		return "", fmt.Errorf("open body: %w", err)
+	}
+	defer fid.Close()
+	sc := bufio.NewScanner(fid)
+	if sc.Scan() {
+		return sc.Text(), nil
+	}
+	return "", sc.Err()
 }
