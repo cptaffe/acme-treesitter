@@ -3,6 +3,7 @@ package treesitter
 import (
 	"bufio"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"time"
@@ -18,62 +19,115 @@ const layerName = "treesitter"
 
 const debounceDuration = 200 * time.Millisecond
 
-// RunWindow is the per-window goroutine.  It:
-//  1. Detects the file's language via the compiled filename handlers.
-//  2. Allocates an acme-styles layer for the window.
-//  3. Does an initial parse + highlight.
-//  4. Reads <winid>/log for body edits; re-highlights after a debounce.
-//
-// When ctx is cancelled (e.g. on SIGTERM/SIGINT) the layer is deleted from
-// the compositor so highlights don't linger after the process exits.
-func RunWindow(ctx context.Context, wg interface{ Done() }, id int, name string, handlers []Handler) {
-	defer wg.Done()
+// errWindowClosed is returned by runWindowOnce when the window's edit log
+// reaches EOF cleanly — i.e. the user closed the window.
+var errWindowClosed = errors.New("window closed")
 
+// RunWindow is the per-window control loop.  It:
+//
+//  1. Detects the file's language (filename patterns, then shebang fallback).
+//     If acme is temporarily unavailable for shebang detection it retries
+//     with exponential backoff rather than giving up.
+//  2. Enters a reconcile loop that calls runWindowOnce.  On any transient
+//     error (compositor down, acme connection dropped, etc.) it waits with
+//     exponential backoff and tries again.
+//
+// The loop exits only when the window is closed (clean EOF from the edit
+// log) or ctx is cancelled.
+func RunWindow(ctx context.Context, id int, name string, handlers []Handler) {
 	ctx = logger.NewContext(ctx, logger.L(ctx).With(zap.Int("window", id), zap.String("name", name)))
 	log := logger.L(ctx)
 
-	// Open the acme connection first: it is needed for body reads whether we
-	// detect the language by filename or by shebang.
-	fs, err := client.MountService("acme")
-	if err != nil {
-		log.Debug("mount acme", zap.Error(err))
-		return
-	}
-	defer fs.Close()
-
-	lang := detectLanguage(handlers, name)
-	if lang == nil {
-		// Filename didn't match; peek at the first line for a #! interpreter.
-		if first, err := readFirstLine(id, fs); err == nil {
-			lang = detectByShebang(first)
-		}
-	}
+	lang := detectLang(ctx, id, name, handlers)
 	if lang == nil {
 		log.Debug("no handler matched")
 		return
 	}
 	log.Debug("matched language", zap.String("lang", lang.Name))
 
+	bo := backoff{min: 200 * time.Millisecond, max: time.Minute}
+	for {
+		err := runWindowOnce(ctx, id, lang)
+		switch {
+		case err == nil || errors.Is(err, errWindowClosed):
+			log.Debug("window closed")
+			return
+		case ctx.Err() != nil:
+			return
+		default:
+			d := bo.next()
+			log.Warn("session error, retrying", zap.Error(err), zap.Duration("in", d))
+			select {
+			case <-time.After(d):
+			case <-ctx.Done():
+				return
+			}
+		}
+	}
+}
+
+// detectLang returns the Language for the given window, trying filename
+// patterns first and falling back to shebang detection.  Shebang detection
+// requires reading the body from acme; if acme is temporarily unavailable
+// it retries with backoff rather than returning nil immediately.
+func detectLang(ctx context.Context, id int, name string, handlers []Handler) *Language {
+	if lang := detectLanguage(handlers, name); lang != nil {
+		return lang
+	}
+	// Shebang fallback — need an acme connection.  Retry if not ready yet.
+	bo := backoff{min: 200 * time.Millisecond, max: time.Minute}
+	for {
+		fs, err := client.MountService("acme")
+		if err != nil {
+			select {
+			case <-time.After(bo.next()):
+				continue
+			case <-ctx.Done():
+				return nil
+			}
+		}
+		first, err := readFirstLine(id, fs)
+		fs.Close()
+		if err != nil {
+			// Window probably gone; treat as no match.
+			return nil
+		}
+		return detectByShebang(first) // nil if no recognised shebang
+	}
+}
+
+// runWindowOnce performs one complete highlight session for a window:
+//   - opens an acme-styles compositor layer,
+//   - opens a fresh acme connection,
+//   - does an initial parse + highlight,
+//   - watches the per-window edit log and re-highlights after edits.
+//
+// It returns errWindowClosed on clean log EOF, ctx.Err() if the context is
+// cancelled, or another error for transient failures the caller should retry.
+func runWindowOnce(ctx context.Context, id int, lang *Language) error {
+	log := logger.L(ctx)
+
 	sl, err := layer.Open(id, layerName)
 	if err != nil {
-		log.Debug("open layer", zap.Error(err))
-	} else {
-		log.Debug("allocated layer", zap.Int("layerID", sl.LayerID))
+		return fmt.Errorf("open layer: %w", err)
 	}
-	// sl may be nil if acme-styles is not running; Apply/Clear/Delete are nil-safe.
+	log.Debug("allocated layer", zap.Int("layerID", sl.LayerID))
+	defer sl.Delete()
 
-	// Initial highlight.
+	fs, err := client.MountService("acme")
+	if err != nil {
+		return fmt.Errorf("mount acme: %w", err)
+	}
+	defer fs.Close()
+
 	if err := doHighlight(ctx, id, lang, sl, fs); err != nil {
-		log.Debug("initial highlight", zap.Error(err))
-	} else {
-		log.Debug("initial highlight ok")
+		return fmt.Errorf("initial highlight: %w", err)
 	}
+	log.Debug("initial highlight ok")
 
-	// Open <winid>/log for body-edit notifications.
 	logFid, err := fs.Open(fmt.Sprintf("%d/log", id), plan9.OREAD)
 	if err != nil {
-		log.Debug("open log, no incremental re-highlight", zap.Error(err))
-		return
+		return fmt.Errorf("open log: %w", err)
 	}
 	log.Debug("watching log")
 
@@ -81,12 +135,15 @@ func RunWindow(ctx context.Context, wg interface{ Done() }, id int, name string,
 	timer.Stop()
 	pending := false
 
-	// Read log lines in a separate goroutine so the main select can also
-	// handle the debounce timer and ctx cancellation.
+	// lines carries edit notifications (I/D lines) from the scanner goroutine.
+	// scanResult carries the exit reason: nil = clean EOF (window closed), else error.
+	// goroutineExited is closed after the goroutine writes to scanResult.
 	lines := make(chan struct{}, 32)
-	scanDone := make(chan struct{})
+	scanResult := make(chan error, 1) // buffered so the goroutine never blocks
+	goroutineExited := make(chan struct{})
+
 	go func() {
-		defer close(scanDone)
+		defer close(goroutineExited)
 		sc := bufio.NewScanner(logFid)
 		for sc.Scan() {
 			line := sc.Text()
@@ -97,46 +154,42 @@ func RunWindow(ctx context.Context, wg interface{ Done() }, id int, name string,
 				}
 			}
 		}
+		scanResult <- sc.Err() // nil = window closed cleanly
 	}()
 
 	defer func() {
-		logFid.Close() // unblocks the scanner goroutine if still running
-		<-scanDone     // wait for it to exit before returning
+		logFid.Close()      // unblocks the scanner goroutine
+		<-goroutineExited   // wait for it to finish
 	}()
 
 	for {
 		select {
 		case <-ctx.Done():
-			// Process is exiting: delete the layer so highlights don't linger.
-			sl.Delete()
-			return
+			return ctx.Err()
 
-		case _, ok := <-lines:
-			if !ok {
-				// log EOF — window closed; acme-styles will clean up the WinState.
-				sl.Clear()
-				return
-			}
+		case <-lines:
 			if !pending {
 				timer.Reset(debounceDuration)
 				pending = true
 			}
 
+		case err := <-scanResult:
+			if err == nil {
+				return errWindowClosed
+			}
+			return err
+
 		case <-timer.C:
 			pending = false
 			if err := doHighlight(ctx, id, lang, sl, fs); err != nil {
-				log.Debug("re-highlight", zap.Error(err))
+				return fmt.Errorf("re-highlight: %w", err)
 			}
-
-		case <-scanDone:
-			sl.Clear()
-			return
 		}
 	}
 }
 
-// doHighlight reads the window body from acme via fs, parses it with
-// tree-sitter, and applies the resulting style entries to sl.
+// doHighlight reads the window body, parses it with tree-sitter, and writes
+// the resulting highlight entries to sl.
 func doHighlight(ctx context.Context, id int, lang *Language, sl *layer.StyleLayer, fs *client.Fsys) error {
 	log := logger.L(ctx)
 	body, err := readBody(id, fs)
@@ -145,14 +198,10 @@ func doHighlight(ctx context.Context, id int, lang *Language, sl *layer.StyleLay
 	}
 	entries := computeHighlights(lang, body)
 	log.Debug("highlight entries computed", zap.Int("count", len(entries)))
-	if err := sl.Apply(entries); err != nil {
-		return err
-	}
-	log.Debug("Apply ok")
-	return nil
+	return sl.Apply(entries)
 }
 
-// readBody reads <id>/body from the given acme 9P connection in full.
+// readBody reads <id>/body from acme in full.
 func readBody(id int, fs *client.Fsys) ([]byte, error) {
 	fid, err := fs.Open(fmt.Sprintf("%d/body", id), plan9.OREAD)
 	if err != nil {

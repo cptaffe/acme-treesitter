@@ -78,13 +78,18 @@ func main() {
 
 	start := func(id int, name string) {
 		wg.Add(1)
-		go ts.RunWindow(ctx, &wg, id, name, handlers)
+		go func() {
+			defer wg.Done()
+			ts.RunWindow(ctx, id, name, handlers)
+		}()
 	}
 
-	// Seed from currently-open windows.
+	// Seed from currently-open windows.  If the index read fails (e.g. acme
+	// is mid-update and the line parser chokes on a partial field), just warn
+	// and proceed with an empty seed set — new windows arrive via the log.
 	wins, err := acme.Windows()
 	if err != nil {
-		l.Fatal("acme.Windows", zap.Error(err))
+		l.Warn("acme.Windows: skipping initial seed", zap.Error(err))
 	}
 	for _, w := range wins {
 		start(w.ID, w.Name)
