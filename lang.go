@@ -9,9 +9,11 @@ import (
 	tree_sitter_bash "github.com/tree-sitter/tree-sitter-bash/bindings/go"
 	tree_sitter_c "github.com/tree-sitter/tree-sitter-c/bindings/go"
 	tree_sitter_go "github.com/tree-sitter/tree-sitter-go/bindings/go"
+	tree_sitter_java "github.com/tree-sitter/tree-sitter-java/bindings/go"
 	tree_sitter_js "github.com/tree-sitter/tree-sitter-javascript/bindings/go"
 	tree_sitter_python "github.com/tree-sitter/tree-sitter-python/bindings/go"
 	tree_sitter_rust "github.com/tree-sitter/tree-sitter-rust/bindings/go"
+	tree_sitter_scala "github.com/tree-sitter/tree-sitter-scala/bindings/go"
 )
 
 //go:embed queries/go.scm
@@ -31,6 +33,12 @@ var jsHighlights string
 
 //go:embed queries/bash.scm
 var bashHighlights string
+
+//go:embed queries/java.scm
+var javaHighlights string
+
+//go:embed queries/scala.scm
+var scalaHighlights string
 
 // Language bundles a compiled tree-sitter Language pointer and a pre-compiled
 // Query.  Both are safe to share across goroutines (read-only after init).
@@ -68,6 +76,8 @@ func initLanguages() {
 			{"rust", tree_sitter.NewLanguage(tree_sitter_rust.Language()), rustHighlights},
 			{"javascript", tree_sitter.NewLanguage(tree_sitter_js.Language()), jsHighlights},
 			{"bash", tree_sitter.NewLanguage(tree_sitter_bash.Language()), bashHighlights},
+			{"java", tree_sitter.NewLanguage(tree_sitter_java.Language()), javaHighlights},
+			{"scala", tree_sitter.NewLanguage(tree_sitter_scala.Language()), scalaHighlights},
 		}
 
 		langByName = make(map[string]*Language, len(specs))
