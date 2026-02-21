@@ -1,15 +1,13 @@
 package treesitter
 
 import (
-	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
-	"io"
 	"time"
 
-	"9fans.net/go/plan9"
-	"9fans.net/go/plan9/client"
+	"9fans.net/go/acme"
 	"github.com/cptaffe/acme-styles/layer"
 	"github.com/cptaffe/acme-treesitter/logger"
 	"go.uber.org/zap"
@@ -68,8 +66,8 @@ func RunWindow(ctx context.Context, id int, name string, handlers []Handler) {
 
 // detectLang returns the Language for the given window, trying filename
 // patterns first and falling back to shebang detection.  Shebang detection
-// requires reading the body from acme; if acme is temporarily unavailable
-// it retries with backoff rather than returning nil immediately.
+// reads the body via the shared acme connection; it retries with backoff if
+// acme is temporarily unavailable.
 func detectLang(ctx context.Context, id int, name string, handlers []Handler) *Language {
 	if lang := detectLanguage(handlers, name); lang != nil {
 		return lang
@@ -77,7 +75,7 @@ func detectLang(ctx context.Context, id int, name string, handlers []Handler) *L
 	// Shebang fallback — need an acme connection.  Retry if not ready yet.
 	bo := Backoff{Base: 200 * time.Millisecond, Cap: time.Minute}
 	for {
-		fs, err := client.MountService("acme")
+		w, err := acme.Open(id, nil)
 		if err != nil {
 			select {
 			case <-time.After(bo.Next()):
@@ -86,19 +84,28 @@ func detectLang(ctx context.Context, id int, name string, handlers []Handler) *L
 				return nil
 			}
 		}
-		first, err := readFirstLine(id, fs)
-		fs.Close()
+		body, err := w.ReadBody()
+		w.CloseFiles()
 		if err != nil {
 			// Window probably gone; treat as no match.
 			return nil
 		}
-		return detectByShebang(first) // nil if no recognised shebang
+		return detectByShebang(firstLine(body)) // nil if no recognised shebang
 	}
+}
+
+// firstLine returns the content of body up to (but not including) the first
+// newline, or the whole body if there is no newline.
+func firstLine(body []byte) string {
+	if i := bytes.IndexByte(body, '\n'); i >= 0 {
+		return string(body[:i])
+	}
+	return string(body)
 }
 
 // runWindowOnce performs one complete highlight session for a window:
 //   - opens an acme-styles compositor layer,
-//   - opens a fresh acme connection,
+//   - opens the window via the shared acme connection,
 //   - does an initial parse + highlight,
 //   - watches the per-window edit log and re-highlights after edits.
 //
@@ -114,28 +121,25 @@ func runWindowOnce(ctx context.Context, id int, lang *Language) error {
 	log.Debug("allocated layer", zap.Int("layerID", sl.LayerID))
 	defer sl.Delete()
 
-	fs, err := client.MountService("acme")
+	// acme.Open uses the package-level shared connection (defaultFsys), so all
+	// window goroutines share a single OS-level socket to acme rather than
+	// each dialling their own.
+	w, err := acme.Open(id, nil)
 	if err != nil {
-		return fmt.Errorf("mount acme: %w", err)
+		return fmt.Errorf("open acme win: %w", err)
 	}
-	defer fs.Close()
 
-	if err := doHighlight(ctx, id, lang, sl, fs); err != nil {
+	if err := doHighlight(ctx, lang, sl, w); err != nil {
+		w.CloseFiles()
 		return fmt.Errorf("initial highlight: %w", err)
 	}
 	log.Debug("initial highlight ok")
-
-	logFid, err := fs.Open(fmt.Sprintf("%d/log", id), plan9.OREAD)
-	if err != nil {
-		return fmt.Errorf("open log: %w", err)
-	}
-	log.Debug("watching log")
 
 	timer := time.NewTimer(debounceDuration)
 	timer.Stop()
 	pending := false
 
-	// lines carries edit notifications (I/D lines) from the scanner goroutine.
+	// lines carries edit notifications (I/D events) from the scanner goroutine.
 	// scanResult carries the exit reason: nil = clean EOF (window closed), else error.
 	// goroutineExited is closed after the goroutine writes to scanResult.
 	lines := make(chan struct{}, 32)
@@ -144,22 +148,24 @@ func runWindowOnce(ctx context.Context, id int, lang *Language) error {
 
 	go func() {
 		defer close(goroutineExited)
-		sc := bufio.NewScanner(logFid)
-		for sc.Scan() {
-			line := sc.Text()
-			if len(line) >= 1 && (line[0] == 'I' || line[0] == 'D') {
+		for {
+			e, err := w.ReadLog()
+			if err != nil {
+				scanResult <- err
+				return
+			}
+			if e.Op == 'I' || e.Op == 'D' {
 				select {
 				case lines <- struct{}{}:
 				default:
 				}
 			}
 		}
-		scanResult <- sc.Err() // nil = window closed cleanly
 	}()
 
 	defer func() {
-		logFid.Close()      // unblocks the scanner goroutine
-		<-goroutineExited   // wait for it to finish
+		w.CloseFiles()    // closes the log fid, unblocking ReadLog in the goroutine
+		<-goroutineExited // wait for it to finish
 	}()
 
 	for {
@@ -181,7 +187,7 @@ func runWindowOnce(ctx context.Context, id int, lang *Language) error {
 
 		case <-timer.C:
 			pending = false
-			if err := doHighlight(ctx, id, lang, sl, fs); err != nil {
+			if err := doHighlight(ctx, lang, sl, w); err != nil {
 				return fmt.Errorf("re-highlight: %w", err)
 			}
 		}
@@ -190,37 +196,14 @@ func runWindowOnce(ctx context.Context, id int, lang *Language) error {
 
 // doHighlight reads the window body, parses it with tree-sitter, and writes
 // the resulting highlight entries to sl.
-func doHighlight(ctx context.Context, id int, lang *Language, sl *layer.StyleLayer, fs *client.Fsys) error {
+func doHighlight(ctx context.Context, lang *Language, sl *layer.StyleLayer, w *acme.Win) error {
 	log := logger.L(ctx)
-	body, err := readBody(id, fs)
+	// ReadBody opens a fresh fid each time so reading always starts at offset 0.
+	body, err := w.ReadBody()
 	if err != nil {
 		return err
 	}
 	entries := computeHighlights(lang, body)
 	log.Debug("highlight entries computed", zap.Int("count", len(entries)))
 	return sl.Apply(entries)
-}
-
-// readBody reads <id>/body from acme in full.
-func readBody(id int, fs *client.Fsys) ([]byte, error) {
-	fid, err := fs.Open(fmt.Sprintf("%d/body", id), plan9.OREAD)
-	if err != nil {
-		return nil, fmt.Errorf("open body: %w", err)
-	}
-	defer fid.Close()
-	return io.ReadAll(fid)
-}
-
-// readFirstLine reads the first line of <id>/body for shebang detection.
-func readFirstLine(id int, fs *client.Fsys) (string, error) {
-	fid, err := fs.Open(fmt.Sprintf("%d/body", id), plan9.OREAD)
-	if err != nil {
-		return "", fmt.Errorf("open body: %w", err)
-	}
-	defer fid.Close()
-	sc := bufio.NewScanner(fid)
-	if sc.Scan() {
-		return sc.Text(), nil
-	}
-	return "", sc.Err()
 }
