@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// backoff implements "full jitter" truncated exponential backoff:
+// Backoff implements "full jitter" truncated exponential backoff:
 //
 //	sleep = random_between(0, min(cap, base * 2^attempt))
 //
@@ -14,26 +14,26 @@ import (
 // [0, ceiling], so they naturally scatter across the whole window instead
 // of clustering near the ceiling like additive jitter does.
 //
-// The zero value is ready to use; set base and cap before the first call
-// to next().
-type backoff struct {
-	base    time.Duration
-	cap     time.Duration
+// The zero value is ready to use; set Base and Cap before the first call
+// to Next().
+type Backoff struct {
+	Base    time.Duration
+	Cap     time.Duration
 	attempt int
 }
 
-// next advances the attempt counter and returns a random duration in
+// Next advances the attempt counter and returns a random duration in
 // [0, min(cap, base*2^attempt)].
-func (b *backoff) next() time.Duration {
+func (b *Backoff) Next() time.Duration {
 	// Compute ceiling = base * 2^attempt, capped to avoid overflow.
 	// We cap the exponent at 62 so the shift never overflows int64.
 	exp := b.attempt
 	if exp > 62 {
 		exp = 62
 	}
-	ceiling := b.base << uint(exp)
-	if ceiling <= 0 || ceiling > b.cap { // overflow or over cap
-		ceiling = b.cap
+	ceiling := b.Base << uint(exp)
+	if ceiling <= 0 || ceiling > b.Cap { // overflow or over cap
+		ceiling = b.Cap
 	}
 	b.attempt++
 	if ceiling <= 0 {
@@ -42,8 +42,8 @@ func (b *backoff) next() time.Duration {
 	return time.Duration(rand.Int63n(int64(ceiling) + 1))
 }
 
-// reset restores the backoff to its initial state.  Call after a successful
+// Reset restores the Backoff to its initial state.  Call after a successful
 // attempt so the next failure starts from the beginning again.
-func (b *backoff) reset() {
+func (b *Backoff) Reset() {
 	b.attempt = 0
 }

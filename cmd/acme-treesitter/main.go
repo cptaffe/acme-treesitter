@@ -20,6 +20,7 @@ import (
 	"os/signal"
 	"sync"
 	"syscall"
+	"time"
 
 	"9fans.net/go/acme"
 	ts "github.com/cptaffe/acme-treesitter"
@@ -76,41 +77,105 @@ func main() {
 
 	var wg sync.WaitGroup
 
+	// active tracks which window IDs currently have a RunWindow goroutine.
+	// Guarded by activeMu.  start() is idempotent: safe to call multiple
+	// times for the same ID (e.g. on log reconnection after acme restart).
+	var activeMu sync.Mutex
+	active := make(map[int]struct{})
+
 	start := func(id int, name string) {
+		activeMu.Lock()
+		if _, ok := active[id]; ok {
+			activeMu.Unlock()
+			return
+		}
+		active[id] = struct{}{}
+		activeMu.Unlock()
+
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
+			defer func() {
+				activeMu.Lock()
+				delete(active, id)
+				activeMu.Unlock()
+			}()
 			ts.RunWindow(ctx, id, name, handlers)
 		}()
 	}
 
-	// Seed from currently-open windows.  If the index read fails (e.g. acme
-	// is mid-update and the line parser chokes on a partial field), just warn
-	// and proceed with an empty seed set — new windows arrive via the log.
-	wins, err := acme.Windows()
-	if err != nil {
-		l.Warn("acme.Windows: skipping initial seed", zap.Error(err))
-	}
-	for _, w := range wins {
-		start(w.ID, w.Name)
+	// withRetry calls fn until it returns nil or the context is cancelled,
+	// sleeping between failures using full-jitter exponential backoff.
+	withRetry := func(base, cap time.Duration, fn func() error) error {
+		bo := ts.Backoff{Base: base, Cap: cap}
+		for {
+			if err := fn(); err == nil {
+				return nil
+			} else if ctx.Err() != nil {
+				return ctx.Err()
+			} else {
+				d := bo.Next()
+				l.Warn("retrying", zap.Error(err), zap.Duration("in", d))
+				select {
+				case <-time.After(d):
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+			}
+		}
 	}
 
-	// Stream new opens and closes.
-	lr, err := acme.Log()
-	if err != nil {
-		l.Fatal("acme.Log", zap.Error(err))
-	}
-	for {
-		ev, err := lr.Read()
-		if err != nil {
-			// acme exited or log closed; wait for all windows to clean up.
-			cancel()
-			wg.Wait()
-			l.Fatal("acme log", zap.Error(err))
+	// Main reconnect loop.
+	//
+	// The first call to acme.Windows() and acme.Log() blocks inside the
+	// acme package until the background supervisor has established the
+	// initial connection to acme (no retry needed here for startup).
+	//
+	// After a disconnect, fsys goes nil and both calls return "not
+	// connected" immediately; withRetry handles the re-connect wait.
+	for ctx.Err() == nil {
+		// Seed from currently-open windows.
+		var wins []acme.WinInfo
+		if err := withRetry(200*time.Millisecond, 30*time.Second, func() error {
+			var e error
+			wins, e = acme.Windows()
+			return e
+		}); err != nil {
+			break
 		}
-		switch ev.Op {
-		case "new":
-			start(ev.ID, ev.Name)
+		for _, w := range wins {
+			start(w.ID, w.Name)
+		}
+
+		// Open the log stream.
+		var lr *acme.LogReader
+		if err := withRetry(200*time.Millisecond, 30*time.Second, func() error {
+			var e error
+			lr, e = acme.Log()
+			return e
+		}); err != nil {
+			break
+		}
+
+		l.Info("connected to acme log")
+		for {
+			ev, err := lr.Read()
+			if err != nil {
+				lr.Close()
+				if ctx.Err() != nil {
+					goto done
+				}
+				l.Warn("acme log read error, reconnecting", zap.Error(err))
+				break
+			}
+			switch ev.Op {
+			case "new":
+				start(ev.ID, ev.Name)
+			}
 		}
 	}
+
+done:
+	cancel()
+	wg.Wait()
 }

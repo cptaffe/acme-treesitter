@@ -45,7 +45,7 @@ func RunWindow(ctx context.Context, id int, name string, handlers []Handler) {
 	}
 	log.Debug("matched language", zap.String("lang", lang.Name))
 
-	bo := backoff{base: 200 * time.Millisecond, cap: time.Minute}
+	bo := Backoff{Base: 200 * time.Millisecond, Cap: time.Minute}
 	for {
 		err := runWindowOnce(ctx, id, lang)
 		switch {
@@ -55,7 +55,7 @@ func RunWindow(ctx context.Context, id int, name string, handlers []Handler) {
 		case ctx.Err() != nil:
 			return
 		default:
-			d := bo.next()
+			d := bo.Next()
 			log.Warn("session error, retrying", zap.Error(err), zap.Duration("in", d))
 			select {
 			case <-time.After(d):
@@ -75,12 +75,12 @@ func detectLang(ctx context.Context, id int, name string, handlers []Handler) *L
 		return lang
 	}
 	// Shebang fallback — need an acme connection.  Retry if not ready yet.
-	bo := backoff{base: 200 * time.Millisecond, cap: time.Minute}
+	bo := Backoff{Base: 200 * time.Millisecond, Cap: time.Minute}
 	for {
 		fs, err := client.MountService("acme")
 		if err != nil {
 			select {
-			case <-time.After(bo.next()):
+			case <-time.After(bo.Next()):
 				continue
 			case <-ctx.Done():
 				return nil
