@@ -16,10 +16,8 @@ import (
 	"context"
 	"flag"
 	"log"
-	"os"
 	"os/signal"
 	"sync"
-	"syscall"
 	"time"
 
 	"9fans.net/go/acme"
@@ -62,18 +60,10 @@ func main() {
 	}
 	l.Info("handlers compiled", zap.Int("count", len(handlers)))
 
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
-	ctx = logger.NewContext(ctx, l)
 
-	// Cancel the context on SIGTERM or SIGINT so per-window goroutines can
-	// delete their acme-styles layers before the process exits.
-	sigs := make(chan os.Signal, 1)
-	signal.Notify(sigs, syscall.SIGTERM, syscall.SIGINT)
-	go func() {
-		<-sigs
-		cancel()
-	}()
+	ctx, stop := signal.NotifyContext(context.Background(), shutdownSignals...)
+	defer stop()
+	ctx = logger.NewContext(ctx, l)
 
 	var wg sync.WaitGroup
 
@@ -159,6 +149,5 @@ func main() {
 	}
 
 done:
-	cancel()
 	wg.Wait()
 }
