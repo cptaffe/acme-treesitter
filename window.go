@@ -21,10 +21,15 @@ const debounceDuration = 200 * time.Millisecond
 // reaches EOF cleanly — i.e. the user closed the window.
 var errWindowClosed = errors.New("window closed")
 
+// maxRetries is the number of times RunWindow will retry a transient error
+// before giving up on a window.
+const maxRetries = 8
+
 // RunWindow is the per-window entry point.  It detects the file's language
 // (filename patterns first, shebang fallback) and runs one highlight session
-// via runWindowOnce.  It exits when the window is closed, the session fails,
-// or ctx is cancelled.
+// via runWindowOnce.  Transient errors (e.g. acme-styles not yet aware of
+// the window) are retried with exponential backoff.  It exits when the
+// window is closed, the context is cancelled, or retries are exhausted.
 func RunWindow(ctx context.Context, id int, name string, handlers []Handler) {
 	ctx = logger.NewContext(ctx, logger.L(ctx).With(zap.Int("window", id), zap.String("name", name)))
 	log := logger.L(ctx)
@@ -36,15 +41,28 @@ func RunWindow(ctx context.Context, id int, name string, handlers []Handler) {
 	}
 	log.Debug("matched language", zap.String("lang", lang.Name))
 
-	err := runWindowOnce(ctx, id, lang)
-	switch {
-	case err == nil || errors.Is(err, errWindowClosed):
-		log.Debug("window closed")
-	case ctx.Err() != nil:
-		// context cancelled; shutting down
-	default:
-		log.Warn("session error", zap.Error(err))
+	delay := 100 * time.Millisecond
+	for attempt := 0; attempt < maxRetries; attempt++ {
+		err := runWindowOnce(ctx, id, lang)
+		switch {
+		case errors.Is(err, errWindowClosed):
+			log.Debug("window closed")
+			return
+		case ctx.Err() != nil:
+			return
+		}
+		log.Debug("session error, retrying",
+			zap.Error(err), zap.Int("attempt", attempt+1), zap.Duration("in", delay))
+		select {
+		case <-ctx.Done():
+			return
+		case <-time.After(delay):
+		}
+		if delay < 5*time.Second {
+			delay *= 2
+		}
 	}
+	log.Warn("session failed after retries", zap.Int("attempts", maxRetries))
 }
 
 // detectLang returns the Language for the given window, trying filename
