@@ -21,17 +21,10 @@ const debounceDuration = 200 * time.Millisecond
 // reaches EOF cleanly — i.e. the user closed the window.
 var errWindowClosed = errors.New("window closed")
 
-// RunWindow is the per-window control loop.  It:
-//
-//  1. Detects the file's language (filename patterns, then shebang fallback).
-//     If acme is temporarily unavailable for shebang detection it retries
-//     with exponential backoff rather than giving up.
-//  2. Enters a reconcile loop that calls runWindowOnce.  On any transient
-//     error (compositor down, acme connection dropped, etc.) it waits with
-//     exponential backoff and tries again.
-//
-// The loop exits only when the window is closed (clean EOF from the edit
-// log) or ctx is cancelled.
+// RunWindow is the per-window entry point.  It detects the file's language
+// (filename patterns first, shebang fallback) and runs one highlight session
+// via runWindowOnce.  It exits when the window is closed, the session fails,
+// or ctx is cancelled.
 func RunWindow(ctx context.Context, id int, name string, handlers []Handler) {
 	ctx = logger.NewContext(ctx, logger.L(ctx).With(zap.Int("window", id), zap.String("name", name)))
 	log := logger.L(ctx)
@@ -43,55 +36,35 @@ func RunWindow(ctx context.Context, id int, name string, handlers []Handler) {
 	}
 	log.Debug("matched language", zap.String("lang", lang.Name))
 
-	bo := Backoff{Base: 200 * time.Millisecond, Cap: time.Minute}
-	for {
-		err := runWindowOnce(ctx, id, lang)
-		switch {
-		case err == nil || errors.Is(err, errWindowClosed):
-			log.Debug("window closed")
-			return
-		case ctx.Err() != nil:
-			return
-		default:
-			d := bo.Next()
-			log.Warn("session error, retrying", zap.Error(err), zap.Duration("in", d))
-			select {
-			case <-time.After(d):
-			case <-ctx.Done():
-				return
-			}
-		}
+	err := runWindowOnce(ctx, id, lang)
+	switch {
+	case err == nil || errors.Is(err, errWindowClosed):
+		log.Debug("window closed")
+	case ctx.Err() != nil:
+		// context cancelled; shutting down
+	default:
+		log.Warn("session error", zap.Error(err))
 	}
 }
 
 // detectLang returns the Language for the given window, trying filename
-// patterns first and falling back to shebang detection.  Shebang detection
-// reads the body via the shared acme connection; it retries with backoff if
-// acme is temporarily unavailable.
+// patterns first and falling back to shebang detection.  Returns nil if
+// no pattern matches or the window is unavailable.
 func detectLang(ctx context.Context, id int, name string, handlers []Handler) *Language {
 	if lang := detectLanguage(handlers, name); lang != nil {
 		return lang
 	}
-	// Shebang fallback — need an acme connection.  Retry if not ready yet.
-	bo := Backoff{Base: 200 * time.Millisecond, Cap: time.Minute}
-	for {
-		w, err := acme.Open(id, nil)
-		if err != nil {
-			select {
-			case <-time.After(bo.Next()):
-				continue
-			case <-ctx.Done():
-				return nil
-			}
-		}
-		body, err := w.ReadBody()
-		w.CloseFiles()
-		if err != nil {
-			// Window probably gone; treat as no match.
-			return nil
-		}
-		return detectByShebang(firstLine(body)) // nil if no recognised shebang
+	// Shebang fallback — need an acme connection.
+	w, err := acme.Open(id, nil)
+	if err != nil {
+		return nil
 	}
+	body, err := w.ReadBody()
+	w.CloseFiles()
+	if err != nil {
+		return nil
+	}
+	return detectByShebang(firstLine(body))
 }
 
 // firstLine returns the content of body up to (but not including) the first

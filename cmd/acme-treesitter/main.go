@@ -18,7 +18,6 @@ import (
 	"log"
 	"os/signal"
 	"sync"
-	"time"
 
 	"9fans.net/go/acme"
 	ts "github.com/cptaffe/acme-treesitter"
@@ -68,8 +67,7 @@ func main() {
 	var wg sync.WaitGroup
 
 	// active tracks which window IDs currently have a RunWindow goroutine.
-	// Guarded by activeMu.  start() is idempotent: safe to call multiple
-	// times for the same ID (e.g. on log reconnection after acme restart).
+	// Guarded by activeMu.
 	var activeMu sync.Mutex
 	active := make(map[int]struct{})
 
@@ -94,60 +92,39 @@ func main() {
 		}()
 	}
 
-	// Main reconnect loop.  Mount() dials a fresh connection on each
-	// iteration; on failure we wait with full-jitter backoff and retry.
-	// Windows() and Log() are called on the explicit Fsys so that a
-	// broken connection never returns a stale cached result.
-	bo := ts.Backoff{Base: 200 * time.Millisecond, Cap: 30 * time.Second}
-	for ctx.Err() == nil {
-		f, err := acme.Mount()
-		if err != nil {
-			d := bo.Next()
-			l.Warn("mount acme", zap.Error(err), zap.Duration("in", d))
-			select {
-			case <-time.After(d):
-			case <-ctx.Done():
-			}
-			continue
-		}
-		bo.Reset()
+	f, err := acme.Mount()
+	if err != nil {
+		l.Fatal("mount acme", zap.Error(err))
+	}
 
-		// Seed from currently-open windows.
-		wins, err := f.Windows()
-		if err != nil {
-			l.Warn("acme.Windows", zap.Error(err))
-			continue
-		}
-		for _, w := range wins {
-			start(w.ID, w.Name)
-		}
+	wins, err := f.Windows()
+	if err != nil {
+		l.Fatal("acme.Windows", zap.Error(err))
+	}
+	for _, w := range wins {
+		start(w.ID, w.Name)
+	}
 
-		// Open the log stream.
-		var lr *acme.LogReader
-		lr, err = f.Log()
-		if err != nil {
-			l.Warn("acme.Log", zap.Error(err))
-			continue
-		}
+	lr, err := f.Log()
+	if err != nil {
+		l.Fatal("acme.Log", zap.Error(err))
+	}
+	defer lr.Close()
 
-		l.Info("connected to acme log")
-		for {
-			ev, err := lr.Read()
-			if err != nil {
-				lr.Close()
-				if ctx.Err() != nil {
-					goto done
-				}
-				l.Warn("acme log read error, reconnecting", zap.Error(err))
+	l.Info("connected to acme log")
+	for {
+		ev, err := lr.Read()
+		if err != nil {
+			if ctx.Err() != nil {
 				break
 			}
-			switch ev.Op {
-			case "new":
-				start(ev.ID, ev.Name)
-			}
+			l.Fatal("acme log read", zap.Error(err))
+		}
+		switch ev.Op {
+		case "new":
+			start(ev.ID, ev.Name)
 		}
 	}
 
-done:
 	wg.Wait()
 }
