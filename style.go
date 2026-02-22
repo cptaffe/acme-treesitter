@@ -2,6 +2,7 @@ package treesitter
 
 import (
 	"strings"
+	"unicode/utf8"
 
 	"github.com/cptaffe/acme-styles/layer"
 )
@@ -78,21 +79,7 @@ func compressToEntries(stylePerByte []byte, src []byte) []layer.Entry {
 	spanStart := 0
 
 	for byteOff < len(src) {
-		r := src[byteOff]
-		var size int
-		switch {
-		case r < 0x80:
-			size = 1
-		case r < 0xE0:
-			size = 2
-		case r < 0xF0:
-			size = 3
-		default:
-			size = 4
-		}
-		if byteOff+size > len(src) {
-			size = 1 // guard against truncated input
-		}
+		_, size := utf8.DecodeRune(src[byteOff:])
 
 		idx := int(stylePerByte[byteOff])
 		if idx != curIdx {
