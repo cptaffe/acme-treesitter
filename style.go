@@ -7,37 +7,38 @@ import (
 	"github.com/cptaffe/acme-styles/layer"
 )
 
-// canonicalTable is the ordered list of tree-sitter capture names that
-// acme-treesitter recognises and emits.  Index 0 is the "no style" sentinel.
+// canonicalTable is the ordered list of short palette names that
+// acme-treesitter emits.  Index 0 is the "no style" sentinel.
 // These names must match the palette entries in the master styles file.
 var canonicalTable = []string{
 	"", // 0 = unstyled
-	"keyword",
-	"comment",
-	"string",
-	"type",
-	"number",
-	"operator",
-	"error",
-	"function",
-	"macro",
+	"k", // keyword
+	"c", // comment
+	"s", // string
+	"t", // type
+	"n", // number
+	"o", // operator
+	"e", // error
+	"f", // function
+	"m", // macro
 }
 
-// canonicalIndex maps palette entry names to indices in canonicalTable.
-var canonicalIndex = func() map[string]int {
-	m := make(map[string]int, len(canonicalTable))
-	for i, name := range canonicalTable {
-		if name != "" {
-			m[name] = i
-		}
-	}
-	return m
-}()
+// canonicalIndex maps both short and long capture names to indices in
+// canonicalTable.  The long names are used in the .scm query files;
+// the short names are the emitted palette entry names.
+var canonicalIndex = map[string]int{
+	// short names (palette entries)
+	"k": 1, "c": 2, "s": 3, "t": 4, "n": 5,
+	"o": 6, "e": 7, "f": 8, "m": 9,
+	// long names (tree-sitter capture name stems in .scm files)
+	"keyword": 1, "comment": 2, "string": 3, "type": 4, "number": 5,
+	"operator": 6, "error": 7, "function": 8, "macro": 9,
+}
 
-// lookupCaptureName converts a tree-sitter capture name (e.g. "@function.method")
+// lookupCaptureIdx converts a tree-sitter capture name (e.g. "@function.method")
 // to a canonicalTable index using hierarchical fallback:
 //
-//	"function.method" → "function" → 0 (unknown)
+//	"function.method" → "function" → index 8 ("f")
 //
 // Index 0 means "skip this capture".  Callers retrieve the name via
 // canonicalTable[idx].
