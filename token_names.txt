@@ -1,0 +1,20 @@
+# token_names.txt — maps tree-sitter capture name stems to short palette names.
+#
+# Format: <palette-name> <capture-stem>
+#   palette-name  short name used in ~/lib/acme/styles
+#   capture-stem  tree-sitter capture name after stripping the leading @ and
+#                 any language-specific suffix (e.g. "function" matches
+#                 @function, @function.method, @function.builtin, …)
+#
+# Lines beginning with # and blank lines are ignored.
+# First match wins; stems not listed here are left unstyled.
+
+k keyword
+c comment
+s string
+t type
+n number
+o operator
+e error
+f function
+m macro
