@@ -22,3 +22,5 @@ require (
 	github.com/mattn/go-pointer v0.0.1 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
 )
+
+replace 9fans.net/go => ../9fans-go

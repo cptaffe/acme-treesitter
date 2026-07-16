@@ -13,6 +13,7 @@ import (
 	tree_sitter_python "github.com/tree-sitter/tree-sitter-python/bindings/go"
 	tree_sitter_rust "github.com/tree-sitter/tree-sitter-rust/bindings/go"
 	tree_sitter_scala "github.com/tree-sitter/tree-sitter-scala/bindings/go"
+	tree_sitter_markdown "github.com/cptaffe/acme-treesitter/markdown"
 )
 
 //go:embed queries/go.scm
@@ -38,6 +39,9 @@ var javaHighlights string
 
 //go:embed queries/scala.scm
 var scalaHighlights string
+
+//go:embed queries/markdown.scm
+var markdownHighlights string
 
 // Language bundles a compiled tree-sitter Language pointer and a pre-compiled
 // Query.  Both are safe to share across goroutines (read-only after init).
@@ -71,6 +75,7 @@ func init() {
 		{"bash", tree_sitter.NewLanguage(tree_sitter_bash.Language()), bashHighlights},
 		{"java", tree_sitter.NewLanguage(tree_sitter_java.Language()), javaHighlights},
 		{"scala", tree_sitter.NewLanguage(tree_sitter_scala.Language()), scalaHighlights},
+		{"markdown", tree_sitter.NewLanguage(tree_sitter_markdown.Language()), markdownHighlights},
 	}
 
 	langByName = make(map[string]*Language, len(specs))
