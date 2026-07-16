@@ -3,9 +3,6 @@ package treesitter
 import (
 	_ "embed"
 	"strings"
-	"unicode/utf8"
-
-	"github.com/cptaffe/acme-styles/layer"
 )
 
 //go:embed token_names.txt
@@ -70,54 +67,3 @@ func lookupCaptureIdx(captureName string) int {
 	}
 }
 
-// applyCapture marks bytes [start, end) in stylePerByte with idx,
-// but only where the slot is still 0 ("first match wins").
-func applyCapture(stylePerByte []byte, start, end, idx int) {
-	if idx == 0 {
-		return
-	}
-	for i := start; i < end && i < len(stylePerByte); i++ {
-		if stylePerByte[i] == 0 {
-			stylePerByte[i] = byte(idx)
-		}
-	}
-}
-
-// compressToEntries converts a per-byte style-index array (stylePerByte[i] is
-// an index into canonicalTable; 0 = unstyled) into a slice of layer.Entry
-// values using rune offsets (Start inclusive, End exclusive).
-func compressToEntries(stylePerByte []byte, src []byte) []layer.Entry {
-	var entries []layer.Entry
-	byteOff := 0
-	runeOff := 0
-	curIdx := 0
-	spanStart := 0
-
-	for byteOff < len(src) {
-		_, size := utf8.DecodeRune(src[byteOff:])
-
-		idx := int(stylePerByte[byteOff])
-		if idx != curIdx {
-			if curIdx != 0 {
-				entries = append(entries, layer.Entry{
-					Name:  canonicalTable[curIdx],
-					Start: spanStart,
-					End:   runeOff,
-				})
-			}
-			curIdx = idx
-			spanStart = runeOff
-		}
-
-		byteOff += size
-		runeOff++
-	}
-	if curIdx != 0 {
-		entries = append(entries, layer.Entry{
-			Name:  canonicalTable[curIdx],
-			Start: spanStart,
-			End:   runeOff,
-		})
-	}
-	return entries
-}

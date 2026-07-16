@@ -1,6 +1,9 @@
-; Headings → keyword (bold blue)
-(atx_heading (inline) @keyword)
-(setext_heading (paragraph) @keyword)
+;From nvim-treesitter/nvim-treesitter
+(atx_heading
+  (inline) @text.title)
+
+(setext_heading
+  (paragraph) @text.title)
 
 [
   (atx_h1_marker)
@@ -11,22 +14,22 @@
   (atx_h6_marker)
   (setext_h1_underline)
   (setext_h2_underline)
-] @keyword
+] @punctuation.special
 
-; Code blocks → string (red tint)
 [
+  (link_title)
   (indented_code_block)
   (fenced_code_block)
-  (link_title)
-] @string
+] @text.literal
 
-(fenced_code_block_delimiter) @operator
+(fenced_code_block_delimiter) @punctuation.delimiter
 
-; Links
-(link_destination) @type
-(link_label)      @type
+(code_fence_content) @none
 
-; List markers, block quotes, thematic breaks → operator
+(link_destination) @text.uri
+
+(link_label) @text.reference
+
 [
   (list_marker_plus)
   (list_marker_minus)
@@ -34,9 +37,11 @@
   (list_marker_dot)
   (list_marker_parenthesis)
   (thematic_break)
+] @punctuation.special
+
+[
   (block_continuation)
   (block_quote_marker)
-] @operator
+] @punctuation.special
 
-; Escape sequences → number (amber)
-(backslash_escape) @number
+(backslash_escape) @string.escape

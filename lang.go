@@ -14,6 +14,7 @@ import (
 	tree_sitter_rust "github.com/tree-sitter/tree-sitter-rust/bindings/go"
 	tree_sitter_scala "github.com/tree-sitter/tree-sitter-scala/bindings/go"
 	tree_sitter_markdown "github.com/cptaffe/acme-treesitter/markdown"
+	tree_sitter_markdown_inline "github.com/cptaffe/acme-treesitter/markdown_inline"
 )
 
 //go:embed queries/go.scm
@@ -43,53 +44,74 @@ var scalaHighlights string
 //go:embed queries/markdown.scm
 var markdownHighlights string
 
-// Language bundles a compiled tree-sitter Language pointer and a pre-compiled
-// Query.  Both are safe to share across goroutines (read-only after init).
+//go:embed queries/markdown_inline.scm
+var markdownInlineHighlights string
+
+//go:embed queries/markdown.injections.scm
+var markdownInjections string
+
+//go:embed queries/rust.injections.scm
+var rustInjections string
+
+// Language bundles a compiled tree-sitter Language pointer and pre-compiled
+// highlight and injection queries.  All fields are safe to share across
+// goroutines (read-only after init).
 type Language struct {
-	Name  string
-	lang  *tree_sitter.Language
-	query *tree_sitter.Query // nil if query compilation failed
+	Name      string
+	lang      *tree_sitter.Language
+	query     *tree_sitter.Query // highlight query; nil if compilation failed
+	injection *tree_sitter.Query // injection query; nil if none
 }
 
-// langByName maps language_id strings → *Language.
-// Populated once by initLanguages; looked up via langByID.
 // langByName maps language_id strings → *Language.
 // Populated once by init; looked up via langByID.
 var langByName map[string]*Language
 
-// init compiles all language grammars and their highlight queries.
-// Grammars whose query fails to parse are registered without a query (files
+// init compiles all language grammars and their highlight and injection queries.
+// Grammars whose highlight query fails are registered without a query (files
 // open without highlighting rather than crashing).
 func init() {
-	specs := []struct {
-		id    string // matches language_id values used in config.yaml
-		lang  *tree_sitter.Language
-		query string
-	}{
-		{"go", tree_sitter.NewLanguage(tree_sitter_go.Language()), goHighlights},
-		{"c", tree_sitter.NewLanguage(tree_sitter_c.Language()), cHighlights},
-		{"cpp", tree_sitter.NewLanguage(tree_sitter_c.Language()), cHighlights}, // fallback: use C grammar for C++ until tree-sitter-cpp is added
-		{"python", tree_sitter.NewLanguage(tree_sitter_python.Language()), pythonHighlights},
-		{"rust", tree_sitter.NewLanguage(tree_sitter_rust.Language()), rustHighlights},
-		{"javascript", tree_sitter.NewLanguage(tree_sitter_js.Language()), jsHighlights},
-		{"bash", tree_sitter.NewLanguage(tree_sitter_bash.Language()), bashHighlights},
-		{"java", tree_sitter.NewLanguage(tree_sitter_java.Language()), javaHighlights},
-		{"scala", tree_sitter.NewLanguage(tree_sitter_scala.Language()), scalaHighlights},
-		{"markdown", tree_sitter.NewLanguage(tree_sitter_markdown.Language()), markdownHighlights},
+	type spec struct {
+		id        string
+		lang      *tree_sitter.Language
+		highlight string
+		injection string // empty = no injection query
+	}
+
+	specs := []spec{
+		{"go", tree_sitter.NewLanguage(tree_sitter_go.Language()), goHighlights, ""},
+		{"c", tree_sitter.NewLanguage(tree_sitter_c.Language()), cHighlights, ""},
+		{"cpp", tree_sitter.NewLanguage(tree_sitter_c.Language()), cHighlights, ""}, // fallback: C grammar for C++
+		{"python", tree_sitter.NewLanguage(tree_sitter_python.Language()), pythonHighlights, ""},
+		{"rust", tree_sitter.NewLanguage(tree_sitter_rust.Language()), rustHighlights, rustInjections},
+		{"javascript", tree_sitter.NewLanguage(tree_sitter_js.Language()), jsHighlights, ""},
+		{"bash", tree_sitter.NewLanguage(tree_sitter_bash.Language()), bashHighlights, ""},
+		{"java", tree_sitter.NewLanguage(tree_sitter_java.Language()), javaHighlights, ""},
+		{"scala", tree_sitter.NewLanguage(tree_sitter_scala.Language()), scalaHighlights, ""},
+		{"markdown", tree_sitter.NewLanguage(tree_sitter_markdown.Language()), markdownHighlights, markdownInjections},
+		{"markdown_inline", tree_sitter.NewLanguage(tree_sitter_markdown_inline.Language()), markdownInlineHighlights, ""},
 	}
 
 	langByName = make(map[string]*Language, len(specs))
 	for _, s := range specs {
 		l := &Language{Name: s.id, lang: s.lang}
-		q, qerr := tree_sitter.NewQuery(s.lang, s.query)
+
+		q, qerr := tree_sitter.NewQuery(s.lang, s.highlight)
 		if qerr != nil {
-			log.Printf("lang %s: query error at offset %d: %s", s.id, qerr.Offset, qerr.Message)
-			// Register without a query — windows open without highlighting.
+			log.Printf("lang %s: highlight query error at offset %d: %s", s.id, qerr.Offset, qerr.Message)
 		} else {
 			l.query = q
-			// q is never closed; it lives for the process lifetime and is
-			// shared (read-only) across all goroutines.
 		}
+
+		if s.injection != "" {
+			iq, iqerr := tree_sitter.NewQuery(s.lang, s.injection)
+			if iqerr != nil {
+				log.Printf("lang %s: injection query error at offset %d: %s", s.id, iqerr.Offset, iqerr.Message)
+			} else {
+				l.injection = iq
+			}
+		}
+
 		langByName[s.id] = l
 	}
 }

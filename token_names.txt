@@ -10,11 +10,18 @@
 # First match wins; stems not listed here are left unstyled.
 
 k keyword
+k text.title
+k text.strong
 c comment
+c text.emphasis
 s string
+s text.literal
 t type
+t text.uri
+t text.reference
 n number
 o operator
+o punctuation
 e error
 f function
 m macro
