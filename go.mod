@@ -20,6 +20,8 @@ require (
 
 require (
 	github.com/mattn/go-pointer v0.0.1 // indirect
+	github.com/tree-sitter-grammars/tree-sitter-yaml v0.7.2 // indirect
+	github.com/tree-sitter/tree-sitter-typescript v0.23.2 // indirect
 	go.uber.org/multierr v1.10.0 // indirect
 )
 

@@ -15,6 +15,8 @@ import (
 	tree_sitter_scala "github.com/tree-sitter/tree-sitter-scala/bindings/go"
 	tree_sitter_markdown "github.com/cptaffe/acme-treesitter/markdown"
 	tree_sitter_markdown_inline "github.com/cptaffe/acme-treesitter/markdown_inline"
+	tree_sitter_typescript "github.com/tree-sitter/tree-sitter-typescript/bindings/go"
+	tree_sitter_yaml "github.com/tree-sitter-grammars/tree-sitter-yaml/bindings/go"
 )
 
 //go:embed queries/go.scm
@@ -46,6 +48,12 @@ var markdownHighlights string
 
 //go:embed queries/markdown_inline.scm
 var markdownInlineHighlights string
+
+//go:embed queries/typescript.scm
+var typescriptHighlights string
+
+//go:embed queries/yaml.scm
+var yamlHighlights string
 
 //go:embed queries/markdown.injections.scm
 var markdownInjections string
@@ -90,6 +98,9 @@ func init() {
 		{"scala", tree_sitter.NewLanguage(tree_sitter_scala.Language()), scalaHighlights, ""},
 		{"markdown", tree_sitter.NewLanguage(tree_sitter_markdown.Language()), markdownHighlights, markdownInjections},
 		{"markdown_inline", tree_sitter.NewLanguage(tree_sitter_markdown_inline.Language()), markdownInlineHighlights, ""},
+		{"typescript", tree_sitter.NewLanguage(tree_sitter_typescript.LanguageTypescript()), typescriptHighlights, ""},
+		{"tsx", tree_sitter.NewLanguage(tree_sitter_typescript.LanguageTSX()), typescriptHighlights, ""},
+		{"yaml", tree_sitter.NewLanguage(tree_sitter_yaml.Language()), yamlHighlights, ""},
 	}
 
 	langByName = make(map[string]*Language, len(specs))
