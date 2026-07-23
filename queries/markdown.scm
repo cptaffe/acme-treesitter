@@ -30,6 +30,22 @@
 
 (link_label) @text.reference
 
+; Tables: header cells read as titles; pipes and the delimiter row are
+; punctuation.  (From nvim-treesitter / Helix.)
+(pipe_table_header
+  (pipe_table_cell) @text.title)
+
+(pipe_table_header
+  "|" @punctuation.special)
+
+(pipe_table_row
+  "|" @punctuation.special)
+
+(pipe_table_delimiter_row
+  "|" @punctuation.special)
+
+(pipe_table_delimiter_cell) @punctuation.special
+
 [
   (list_marker_plus)
   (list_marker_minus)
