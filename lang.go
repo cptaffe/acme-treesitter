@@ -106,8 +106,16 @@ func init() {
 		{"scala", tree_sitter.NewLanguage(tree_sitter_scala.Language()), scalaHighlights, ""},
 		{"markdown", tree_sitter.NewLanguage(tree_sitter_markdown.Language()), markdownHighlights, markdownInjections},
 		{"markdown_inline", tree_sitter.NewLanguage(tree_sitter_markdown_inline.Language()), markdownInlineHighlights, ""},
-		{"typescript", tree_sitter.NewLanguage(tree_sitter_typescript.LanguageTypescript()), typescriptHighlights, ""},
-		{"tsx", tree_sitter.NewLanguage(tree_sitter_typescript.LanguageTSX()), typescriptHighlights, ""},
+		// The TypeScript and TSX grammars are supersets of JavaScript and
+		// share its node names, but typescript.scm only holds the
+		// TypeScript-specific additions (types, modifiers).  Upstream
+		// (nvim-treesitter, Helix) layers it on the JavaScript query via
+		// "; inherits: javascript"; this framework has no inherit support, so
+		// prepend the JavaScript base query explicitly.  Without this, tsx/ts
+		// files highlight only type annotations and leave all JavaScript syntax
+		// (functions, strings, comments, JSX, ...) unstyled.
+		{"typescript", tree_sitter.NewLanguage(tree_sitter_typescript.LanguageTypescript()), jsHighlights + "\n" + typescriptHighlights, ""},
+		{"tsx", tree_sitter.NewLanguage(tree_sitter_typescript.LanguageTSX()), jsHighlights + "\n" + typescriptHighlights, ""},
 		{"yaml", tree_sitter.NewLanguage(tree_sitter_yaml.Language()), yamlHighlights, ""},
 		{"json", tree_sitter.NewLanguage(tree_sitter_json.Language()), jsonHighlights, ""},
 		{"toml", tree_sitter.NewLanguage(tree_sitter_toml.Language()), tomlHighlights, ""},
