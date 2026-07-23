@@ -10,9 +10,11 @@ import (
 	tree_sitter_go "github.com/tree-sitter/tree-sitter-go/bindings/go"
 	tree_sitter_java "github.com/tree-sitter/tree-sitter-java/bindings/go"
 	tree_sitter_js "github.com/tree-sitter/tree-sitter-javascript/bindings/go"
+	tree_sitter_json "github.com/tree-sitter/tree-sitter-json/bindings/go"
 	tree_sitter_python "github.com/tree-sitter/tree-sitter-python/bindings/go"
 	tree_sitter_rust "github.com/tree-sitter/tree-sitter-rust/bindings/go"
 	tree_sitter_scala "github.com/tree-sitter/tree-sitter-scala/bindings/go"
+	tree_sitter_toml "github.com/tree-sitter-grammars/tree-sitter-toml/bindings/go"
 	tree_sitter_markdown "github.com/cptaffe/acme-treesitter/markdown"
 	tree_sitter_markdown_inline "github.com/cptaffe/acme-treesitter/markdown_inline"
 	tree_sitter_typescript "github.com/tree-sitter/tree-sitter-typescript/bindings/go"
@@ -54,6 +56,12 @@ var typescriptHighlights string
 
 //go:embed queries/yaml.scm
 var yamlHighlights string
+
+//go:embed queries/json.scm
+var jsonHighlights string
+
+//go:embed queries/toml.scm
+var tomlHighlights string
 
 //go:embed queries/markdown.injections.scm
 var markdownInjections string
@@ -101,6 +109,8 @@ func init() {
 		{"typescript", tree_sitter.NewLanguage(tree_sitter_typescript.LanguageTypescript()), typescriptHighlights, ""},
 		{"tsx", tree_sitter.NewLanguage(tree_sitter_typescript.LanguageTSX()), typescriptHighlights, ""},
 		{"yaml", tree_sitter.NewLanguage(tree_sitter_yaml.Language()), yamlHighlights, ""},
+		{"json", tree_sitter.NewLanguage(tree_sitter_json.Language()), jsonHighlights, ""},
+		{"toml", tree_sitter.NewLanguage(tree_sitter_toml.Language()), tomlHighlights, ""},
 	}
 
 	langByName = make(map[string]*Language, len(specs))
