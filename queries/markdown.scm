@@ -16,10 +16,14 @@
   (setext_h2_underline)
 ] @punctuation.special
 
+; Note: (fenced_code_block) is intentionally NOT captured here.  The injection
+; pass only fills byte positions the primary pass left unclaimed, so claiming
+; the whole block as @text.literal would prevent any injected fence language
+; (mermaid, python, ...) from highlighting.  The delimiters are still captured
+; below as @punctuation.delimiter; the content is left for injection.
 [
   (link_title)
   (indented_code_block)
-  (fenced_code_block)
 ] @text.literal
 
 (fenced_code_block_delimiter) @punctuation.delimiter

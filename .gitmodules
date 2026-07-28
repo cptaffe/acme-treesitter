@@ -1,3 +1,6 @@
 [submodule "vendor/tree-sitter-markdown"]
 	path = vendor/tree-sitter-markdown
 	url = https://github.com/tree-sitter-grammars/tree-sitter-markdown
+[submodule "vendor/tree-sitter-mermaid"]
+	path = vendor/tree-sitter-mermaid
+	url = https://github.com/monaqa/tree-sitter-mermaid

@@ -16,6 +16,7 @@ import (
 	tree_sitter_scala "github.com/tree-sitter/tree-sitter-scala/bindings/go"
 	tree_sitter_toml "github.com/tree-sitter-grammars/tree-sitter-toml/bindings/go"
 	tree_sitter_markdown "github.com/cptaffe/acme-treesitter/markdown"
+	tree_sitter_mermaid "github.com/cptaffe/acme-treesitter/mermaid"
 	tree_sitter_markdown_inline "github.com/cptaffe/acme-treesitter/markdown_inline"
 	tree_sitter_typescript "github.com/tree-sitter/tree-sitter-typescript/bindings/go"
 	tree_sitter_yaml "github.com/tree-sitter-grammars/tree-sitter-yaml/bindings/go"
@@ -62,6 +63,9 @@ var jsonHighlights string
 
 //go:embed queries/toml.scm
 var tomlHighlights string
+
+//go:embed queries/mermaid.scm
+var mermaidHighlights string
 
 //go:embed queries/markdown.injections.scm
 var markdownInjections string
@@ -119,6 +123,7 @@ func init() {
 		{"yaml", tree_sitter.NewLanguage(tree_sitter_yaml.Language()), yamlHighlights, ""},
 		{"json", tree_sitter.NewLanguage(tree_sitter_json.Language()), jsonHighlights, ""},
 		{"toml", tree_sitter.NewLanguage(tree_sitter_toml.Language()), tomlHighlights, ""},
+		{"mermaid", tree_sitter.NewLanguage(tree_sitter_mermaid.Language()), mermaidHighlights, ""},
 	}
 
 	langByName = make(map[string]*Language, len(specs))
